@@ -1,0 +1,371 @@
+== *Module 3.1 — Jumbo Frames (Networking)*
+
+==== *_Diagnosing and Fixing MTU Mismatch on a Multus-Attached VM_*
+
+--- 
+=== *Scenario*
+
+A virtual machine is attached to a secondary Multus bridge network that
+supports *jumbo frames (MTU 9000)*. However, inside the VM the Multus
+interface still shows the default MTU 1500, so large packets are dropped
+or fragmented.
+
+This results in:
+
+* Failing jumbo-ping tests
+* Reduced throughput
+* Performance bottlenecks
+
+Your task is to:
+
+* Identify the MTU mismatch inside the VM
+* Fix the MTU on the VM’s Multus interface
+* Validate that jumbo frames work end-to-end
+
+*_Note*: Jumbo-frame testing requires two VMs on the same Multus network: 
+_jumbo-vm1_ (the VM to fix) and _jumbo-vm2_ (the ping peer). Jumbo
+frames must pass between two hosts to validate end-to-end MTU.
+
+
+== Relevant Documentation
+
+* https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/multiple_networks/index[*Multus NAD (NetworkAttachmentDefinition) – OpenShift 4.20*]
+
+* https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html-single/advanced_networking/index#changing-cluster-network-mtu[*Configuring MTU in OpenShift – Changing OVN MTU*]
+
+* https://docs.openshift.com/container-platform/4.20/virt/virtual_machines/vm_networking/virt-vm-networking.html[*Virtual Machine Networking – OpenShift Virtualization 4.20*]
+
+---
+
+
+=== *Lab Setup Requirements*
+
+This lab requires two VMs attached to the same jumbo-frame Multus
+network.
+
+==== *VM1 – Test VM (Broken state)*
+
+* Name: *jumbo-vm1*
+* Attached to NAD: jumbo-bridge
+* Guest MTU: *1500* (incorrect)
+* Purpose: This is the VM participants will fix
+
+==== *VM2 – Peer VM (Reference host)*
+
+* Name: *jumbo-vm2*
+* Attached to NAD: jumbo-bridge
+* Guest MTU: *9000 (correct)*
+* Purpose: Ping target for the jumbo-frame tests
+
+Both VMs must be connected to the Multus network defined by jumbo-bridge
+so that they each receive an IP address in the same subnet (for example
+192.168.200.0/24).
+
+Participants will ping from jumbo-vm1 → jumbo-vm2 using:
+
+[width="100%",cols="100%",options="header",]
+|===
+|ping -M do -s 8972 <peer-VM-IP>
+|===
+
+**Why two VMs? +
+**Jumbo frames must be sent to a _different_ host to validate end-to-end
+MTU. Testing against loopback or the pod network would give misleading
+results.
+
+--- 
+
+=== *Initial Guidance (Hints)*
+
+* The Multus network supports MTU 9000, but the VM defaults to 1500.
+* Jumbo frames require MTU 9000 *end-to-end*, including inside the
+guest.
+* Use:
++
+[width="100%",cols="100%",options="header",]
+|===
+|ping -M do -s 8972 <peer-VM-IP>
+|===
++
+to validate jumbo-frame support.
+
+* Use ip link inside the VM to inspect MTU.
+* The Multus-attached interface is usually eth1.
+
+---
+
+=== *Part 1 — Inspect the “Broken” VM*
+
+==== *Accessing the VM*
+
+Use either:
+
+* *The OpenShift Web Console (recommended):* 
++
+Virtualization → VirtualMachines → jumbo-vm1 → Console
+* *SSH* (if enabled)
+
+All commands in this section run *inside jumbo-vm1*.
+
+*1. Check current MTU*
+
+[width="100%",cols="100%",options="header",]
+|===
+|ip link
+|===
+
+Expected:
+
+* *eth0* → Pod network (1410–1500)
+* *eth1* → Multus network → *MTU 1500 (incorrect)*
+
+*2. Test jumbo frames (will fail)*
+
+[width="100%",cols="100%",options="header",]
+|===
+|ping -M do -s 8972 <peer-VM-IP>
+|===
+
+Expected output:
+
+[width="100%",cols="100%",options="header",]
+|===
+|ping: local error: message too long, mtu=1500
+|===
+
+This confirms an MTU mismatch.
+
+---
+
+=== *Part 2 — Review the VM YAML (Misconfigured State)*
+
+VM1 attaches to the Multus network _jumbo-bridge_ using the Multus
+network interface _jumbo-net_:
+
+[source,yaml]
+----
+networks:
+  - name: default
+    pod: {}
+  - name: jumbo-net
+    multus:
+      networkName: jumbo-bridge
+----
+
+But the interface lacks an MTU setting:
+
+[source,yaml]
+----
+interfaces:
+  - name: jumbo-net
+    bridge: {}
+----
+
+Without the *mtu:* field, the guest defaults to *1500*, preventing jumbo
+traffic.
+
+--- 
+
+=== *Part 3 — Apply the Fix (Set MTU 9000 on VM1)*
+
+Patch VM1:
+
+[source,bash]
+----
+oc patch vm jumbo-vm1 -n virt-lab --type=merge -p '
+spec:
+  template:
+    spec:
+      domain:
+        devices:
+          interfaces:
+           - name: jumbo-net
+             bridge: {}
+             mtu: 9000
+'
+----
+
+
+This patch updates the VM template. The VM must be restarted for changes
+to take effect.
+
+Restart VM1:
+
+[width="100%",cols="100%",options="header",]
+|===
+|virtctl restart jumbo-vm1 -n virt-lab
+|===
+
+---
+=== *Part 4 — Validate the Fix*
+
+==== *1. Confirm MTU*
+
+[width="100%",cols="100%",options="header",]
+|===
+|ip link show dev eth1
+|===
+
+Expected:
+
+[width="100%",cols="100%",options="header",]
+|===
+|mtu 9000 ...
+|===
+
+==== *2. Test jumbo frames again*
+
+[width="100%",cols="100%",options="header",]
+|===
+|ping -M do -s 8972 <peer-VM-IP>
+|===
+
+Expected:
+
+[width="100%",cols="100%",options="header",]
+|===
+|8972 bytes from <peer-VM-IP>: icmp_seq=1 ttl=64 time=0.23 ms
+|===
+
+Jumbo frames now work end-to-end.
+
+---
+
+=== *Part 5 — What We Learned*
+
+* Jumbo frames require consistent *MTU 9000 across the entire path*:
+** Physical NIC
+** Node bridge
+** NAD
+** Pod/VM interface
+** Guest OS interface
+* A VM attached to a Multus network defaults to MTU 1500 unless
+explicitly set.
+* MTU mismatches cause fragmentation or drop.
+* Setting MTU at the VM interface resolves the issue.
+
+---
+
+=== *Artifacts for the Lab*
+
+_Note: Below are only the relevant interface sections. Full VM templates
+for vm1 and vm2 are included as separate asset files in the repo
+(vm1-jumbo-broken.yaml and vm2-jumbo-good.yaml)._
+
+==== *1. NetworkAttachmentDefinition (MTU 9000)*
+
+[source,yaml]
+----
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: jumbo-bridge
+  namespace: virt-lab
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "type": "bridge",
+      "bridge": "br-jumbo",
+      "mtu": 9000,
+      "ipam": {
+        "type": "host-local",
+        "subnet": "192.168.200.0/24",
+        "rangeStart": "192.168.200.10",
+        "rangeEnd": "192.168.200.250",
+        "routes": [{ "dst": "0.0.0.0/0" }]
+      }
+    }
+----
+
+==== *2. VM1 (jumbo-vm1) — Broken State (Default MTU)*
+
+[source,yaml]
+----
+interfaces:
+  - name: default
+    masquerade: {}
+  - name: jumbo-net
+    bridge: {}
+----
+
+==== *3. VM1 (jumbo-vm1) — Fixed State (MTU 9000)*
+
+[source,yaml]
+----
+interfaces:
+  - name: jumbo-net
+    bridge: {}
+    mtu: 9000
+----
+
+==== *4. VM2 (jumbo-vm2) — Peer VM (MTU 9000)*
+
+[source,yaml]
+----
+interfaces:
+  - name: default
+    masquerade: {}
+  - name: jumbo-net
+    bridge: {}
+    mtu: 9000
+----
+
+VM2 is fully functional from the start and serves only as the ping peer.
+
+---
+
+=== *Optional Setup Script*
+
+[source,bash]
+----
+#!/bin/bash
+set -e
+
+echo "Creating namespace"
+oc new-project virt-lab || true
+
+echo "Applying jumbo NAD"
+oc apply -f jumbo-bridge-nad.yaml
+
+echo "Deploying VM1 (broken state)"
+oc apply -f vm1-jumbo-broken.yaml
+
+echo "Deploying VM2 (peer)"
+oc apply -f vm2-jumbo-good.yaml
+
+echo "Starting VMs"
+virtctl start jumbo-vm2 -n virt-lab
+virtctl start jumbo-vm1 -n virt-lab
+
+echo "Environment ready. Connect to VM1 and begin testing."
+----
+
+---
+
+=== *Repo Location of Artifacts*
+
+All YAML files used in this lab module are stored in the repo under:
+
+[width="100%",cols="100%",options="header",]
+|===
+|content/modules/ROOT/examples/module-03.1-jumbo-frames/
+|===
+
+This folder contains:
+
+[width="100%",cols="100%",options="header",]
+|===
+|module-03.1-jumbo-frames/ +
+├── jumbo-bridge-nad.yaml +
+├── vm1-jumbo-broken.yaml +
+├── vm1-jumbo-fixed.yaml +
+├── vm2-jumbo-good.yaml +
+└── setup.sh
+|===
+
+These files are referenced throughout the module and are used by the
+setup script.
+
+--- 
+

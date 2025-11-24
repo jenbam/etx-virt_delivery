@@ -1,0 +1,515 @@
+== *Module 3.2 – SCSI vs VirtIO + IOThreads*
+
+*RH1 – ETX Virt Super Lab: Performance, Scalability & Troubleshooting*
+
+== *Scenario*
+
+A customer is running a database workload on a virtual machine. Users
+are complaining about slow performance during peak usage. +
+After investigating the VM, you notice:
+
+* The VM uses *multiple SCSI disks* (visible inside the guest as
+/dev/sdX)
+* All disks share a limited I/O path through the same emulated SCSI
+controller
+* The disks show *high iowait* under load
+* The VM is processing concurrent I/O that SCSI struggles to handle
+efficiently
+
+To improve performance, you decide to:
+
+[arabic]
+. *Switch the VM disks from SCSI → VirtIO*
++
+(inside the guest: /dev/sdX → /dev/vdX)
+
+
+[arabic, start=2]
+. *Enable IOThreads*, so the VM can process disk I/O operations in
+parallel
++
+(using the current supplementalPool policy)
+
+[arabic, start=3]
+. *Enable multi-queue support* for virtio disks
++
+(blockMultiQueue: true) so each disk can use multiple I/O queues
+
+[arabic, start=4]
+. *Verify* that the throughput and latency have improved
++
+Re-run the same multi-process fio test to verify that IOPS increase and
+latency decreases.
++
+*Note:* _The fio test uses numjobs=2 to generate multiple concurrent I/O
+threads. This is important because IOThreads and multiqueue only provide
+benefits when the VM runs multi-threaded workloads. With a single job,
+the improvement would be minimal._
+
+This reflects a common real-world issue: storage performance bottlenecks
+caused by emulated SCSI devices instead of paravirtualized virtio
+devices.
+
+== Relevant Documentation
+
+* https://developers.redhat.com/blog/2025/06/23/feature-introduction-multiple-iothreads-openshift-virtualization[Feature introduction: Multiple IOThreads on OpenShift Virtualization]
+* https://www.redhat.com/en/blog/Improving-performance-of-multiple-I-O-threads-for-red-hat-openshift-virtualization[Improving performance of multiple I/O threads for Red Hat OpenShift Virtualization]
+* https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html-single/virtualization/index#virt-configure-multiple-iothreads_virt-edit-vms[Configuring multiple IOThreads in OpenShift Virtualization 4.20]
+* https://developers.redhat.com/articles/2024/09/05/scaling-virtio-blk-disk-io-iothread-virtqueue-mapping[Scaling virtio-blk disk I/O with IOThread Virtqueue Mapping]
+* https://access.redhat.com/articles/6994974[OpenShift Virtualization - Tuning & Scaling Guide]
+
+== *Initial Guidance (Hints)*
+
+Before applying any fix, consider the following:
+
+* *How does the VM see its disks?*
++
+Run *lsblk* inside the guest.
+
+** /dev/sdX → SCSI (current state)
+** /dev/vdX → virtio (desired state)
+
+* *How many disks does the VM have?*
++
+More disks or more application threads = more contention on a single
+SCSI queue.
+
+* *What is the I/O behaviour?*
++
+Use:
+
+** *iostat -x 1* to view per-disk I/O stats
+** *fio* for synthetic benchmarks
+** *vmstat 1* to view overall CPU and iowait
+
+* *Does the disk bus support multiqueue or IOThreads?*
++
+** SCSI → ❌ single queue +
+** Virtio → ✔ multiqueue + IOThreads
+
+Your goal is to:
+
+[arabic]
+. Identify the bottleneck
+. Use virtio + IOThreads to fix it
+. Measure the improvement
+
+== *Part 1 — Inspect the “Broken” VM*
+
+[arabic]
+. *Confirm current disk type inside the VM*
+
+SSH or console into the VM:
+
+[width="100%",cols="100%",options="header",]
+|===
+|lsblk
+|===
+
+Expected output:
+
+[width="100%",cols="100%",options="header",]
+|===
+|sda 20G +
+sdb 20G +
+sdc 20G
+|===
+
+This confirms *SCSI* disks.
+
+[arabic, start=2]
+. *Baseline performance test (SCSI)*
+
+Check the I/O behaviour under load:
+
+[width="100%",cols="100%",options="header",]
+|===
+|sudo fio --name=randwrite --ioengine=libaio --iodepth=1 \ +
+--rw=randwrite --bs=4k --direct=1 --size=512M --numjobs=2
+--group_reporting \ +
+--filename=/dev/sdb
+|===
+
+*Note:*
+This test uses numjobs=2, which is enough to reveal the SCSI bottleneck.
+Using more concurrent jobs (for example 4 or 16), especially with a
+matching --iodepth, would increase the load further and make the
+performance difference even more visible.
+
+Observe:
+
+* Low IOPS and low throughput (4k random writes)
+* High iowait
+* Each job is limited to a queue depth of 1, so parallelism is poor
+* Latency spikes
+
+This is the bottleneck we want the participants to discover.
+
+== *Part 2 — View the VM YAML (Misconfigured State)*
+
+Participants inspect the VM:
+
+[width="100%",cols="100%",options="header",]
+|===
+|oc get vm db-performance -n virt-lab -o yaml
+|===
+
+They should see something like:
+
+[source,yaml]
+----
+devices:
+  disks:
+    - name: data1
+      disk:
+        bus: scsi
+    - name: data2
+      disk:
+        bus: scsi
+----
+
+This matches the scsi → sdX mapping.
+
+== *Part 3 — Apply the Fix: Convert Disks to VirtIO*
+
+Participants patch the VM:
+
+[source,bash]
+----
+oc patch vm db-performance -n virt-lab --type merge -p '
+spec:
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: data1
+            disk: { bus: virtio }
+          - name: data2
+            disk: { bus: virtio }
+'
+----
+
+Restart VM:
+
+[width="100%",cols="100%",options="header",]
+|===
+|virtctl restart db-performance
+|===
+
+Confirm inside the VM:
+
+[width="100%",cols="100%",options="header",]
+|===
+|lsblk
+|===
+
+Expected output (example):
+
+[width="100%",cols="100%",options="header",]
+|===
+|sda 20G (rootdisk) +
+vdb 20G (data1) +
+vdc 20G (data2)
+|===
+
+You should now see the data disks as /dev/vdX devices instead of only
+/dev/sdX.
+
+Perfect — virtio is now active.
+
+== *Part 4 — Enable IOThreads + blockMultiQueue*
+
+[source,bash]
+----
+oc patch vm db-performance -n virt-lab --type merge -p '
+spec:
+  template:
+    spec:
+      domain:
+        ioThreadsPolicy: supplementalPool
+        ioThreads:
+          supplementalPoolThreadCount: 4
+        devices:
+          blockMultiQueue: true
+'
+----
+
+Restart VM again.
+
+== *Part 5 — Re-run Performance Test*
+
+Inside the VM:
+
+[width="100%",cols="100%",options="header",]
+|===
+|sudo fio --name=randwrite --ioengine=libaio --iodepth=1 \ +
+--rw=randwrite --bs=4k --direct=1 --size=512M --numjobs=2
+--group_reporting \ +
+--filename=/dev/vdb
+|===
+
+Expected improvements:
+
+* Higher IOPS
+* Lower latency
+* Better parallelism and more efficient use of the available queues
+* More stable throughput
+
+Participants will see a significant difference compared to the SCSI
+baseline.
+
+== *Part 6 — What We Learned*
+
+✔ SCSI (sdX) → single queue → bottlenecks under load +
+✔ Virtio (vdX) → paravirtualized → better throughput + multiqueue +
+✔ IOThreads → parallel I/O execution +
+✔ Combined → dramatic improvement for multi-disk workloads (especially
+databases)
+
+This mirrors real customer tuning situations where SCSI defaults cause
+poor DB performance.
+
+== *Artifacts for the Lab*
+
+=== *1. Broken VM — Initial State (SCSI Disks, No IOThreads)*
+
+This is the initial state the participants start with.
+
+[source,yaml]
+----
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: db-performance
+  namespace: virt-lab
+spec:
+  running: false
+  template:
+    spec:
+      domain:
+        resources:
+          requests:
+            memory: 2Gi
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: scsi
+            - name: data1
+              disk:
+                bus: scsi
+            - name: data2
+              disk:
+                bus: scsi
+      volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/containerdisks/fedora:40
+        - name: data1
+          dataVolume:
+            name: data1-dv
+        - name: data2
+          dataVolume:
+            name: data2-dv
+----
+
+Inside the guest, participants will see:
+
+[width="100%",cols="100%",options="header",]
+|===
+|/dev/sda (rootdisk) +
+/dev/sdb (data1) +
+/dev/sdc (data2)
+|===
+
+=== *2. Fixed VM (VirtIO + IOThreads + Multi-Queue)*
+
+This patch converts SCSI to VirtIO and enables the correct IOThreads
+settings.
+
+[source,yaml]
+----
+spec:
+  template:
+    spec:
+      domain:
+        ioThreadsPolicy: supplementalPool
+        ioThreads:
+          supplementalPoolThreadCount: 4
+        devices:
+          blockMultiQueue: true
+          disks:
+            - name: data1
+              disk:
+                bus: virtio
+            - name: data2
+              disk:
+                bus: virtio
+----
+
+Expected inside VM after patch:
+
+* The rootdisk may still appear as /dev/sdX (for example /dev/sda)
+* The data disks will now appear as /dev/vdX devices (for example
+/dev/vdb and /dev/vdc)
+
+
+(Only the data disks matter for this module.)
+
+
+=== *3. FIO Performance Test (Before & After)*
+
+Participants use the same command, only the disk path changes.
+
+[width="100%",cols="100%",options="header",]
+|===
+|sudo fio --name=randwrite --ioengine=libaio --iodepth=1 \ +
+--rw=randwrite --bs=4k --direct=1 --size=512M --numjobs=2 \ +
+--group_reporting --filename=/dev/<disk>
+|===
+
+Use:
+
+** --filename=/dev/sdb *before* tuning (SCSI)
+** --filename=/dev/vdb *after* tuning (VirtIO)
+
+=== *4. Expected Observations*
+
+* *Before tuning (SCSI / sdX):*
+
+** Low IOPS and low throughput
+** High iowait
+** Queue depth stuck at 1
+** Noticeable latency spikes
+
+* *After tuning (VirtIO + IOThreads / vdX):*
+
+** Higher IOPS
+** Lower latency
+** Parallel execution of I/O
+** More stable performance
+
+=== *5. Optional Setup Script (if needed)*
+
+This script prepares the environment for this module by creating a clean
+and consistent starting point. It performs the following actions:
+
+* Creates a dedicated namespace for the exercise
+* Provisions two blank data disks using DataVolumes
+* Deploys a VirtualMachine configured with *SCSI disks* (the initial
+“slow” state)
+* Starts the VM so it is ready for the baseline fio test
+
+[source,bash]
+----
+#!/bin/bash
+set -e
+
+NAMESPACE="virt-lab"
+VM_NAME="db-performance"
+
+echo "[1/5] Creating namespace..."
+oc create namespace $NAMESPACE --dry-run=client -o yaml | oc apply -f -
+
+echo "[2/5] Creating DataVolumes..."
+cat <<EOF | oc apply -n $NAMESPACE -f -
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: data1-dv
+spec:
+  pvc:
+    accessModes: ["ReadWriteOnce"]
+    resources:
+      requests:
+        storage: 5Gi
+  source:
+    blank: {}
+---
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: data2-dv
+spec:
+  pvc:
+    accessModes: ["ReadWriteOnce"]
+    resources:
+      requests:
+        storage: 5Gi
+  source:
+    blank: {}
+EOF
+
+echo "[3/5] Creating VM..."
+cat <<EOF | oc apply -n $NAMESPACE -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: $VM_NAME
+spec:
+  running: false
+  template:
+    spec:
+      domain:
+        resources:
+          requests:
+            memory: 2Gi
+        devices:
+          disks:
+          - name: rootdisk
+            disk:
+              bus: scsi
+          - name: data1
+            disk:
+              bus: scsi
+          - name: data2
+            disk:
+              bus: scsi
+      volumes:
+      - name: rootdisk
+        containerDisk:
+          image: quay.io/containerdisks/fedora:40
+      - name: data1
+        dataVolume:
+          name: data1-dv
+      - name: data2
+        dataVolume:
+          name: data2-dv
+EOF
+
+echo "[4/5] Starting VM..."
+virtctl start $VM_NAME -n $NAMESPACE
+
+echo "[5/5] Setup complete!"
+echo
+echo "VM ready in namespace: $NAMESPACE"
+echo "Disks should appear as /dev/sda /dev/sdb /dev/sdc inside the guest."
+----
+
+=== Repo Location of Artifacts
+
+All YAML files used in this lab module are stored in the repository under:
+
+[width="100%",cols="100%",options="header"]
+|===
+|content/modules/ROOT/examples/module-03.2-scsi-vs-virtio/
+|===
+
+This folder contains:
+
+[width="100%",cols="100%",options="header"]
+|===
+|module-03.2-scsi-vs-virtio/ +
+├── datavolumes.yaml +
+├── setup.sh +
+├── vm-scsi-initial.yaml +
+└── vm-fixed-iothreads.yaml
+|===
+
+These files correspond to:
+
+* **vm-scsi-initial.yaml** – VM in the misconfigured state (SCSI disks, no IOThreads, no multiqueue)  
+* **vm-fixed-iothreads.yaml** – VM after converting disks to virtio-blk, enabling IOThreads and blockMultiQueue  
+* **datavolumes.yaml** – Creates the data disks used by the VM  
+* **setup.sh** – Builds the entire environment (namespace, DataVolumes, VM) for the baseline test

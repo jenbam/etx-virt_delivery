@@ -1,0 +1,39 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: jumbo-vm1
+  namespace: virt-lab
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: jumbo-vm1
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+            - name: jumbo-net
+              bridge: {}
+        resources:
+          requests:
+            memory: 2Gi
+      networks:
+        - name: default
+          pod: {}
+        - name: jumbo-net
+          multus:
+            networkName: jumbo-bridge
+      volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/containerdisks/fedora:latest
+

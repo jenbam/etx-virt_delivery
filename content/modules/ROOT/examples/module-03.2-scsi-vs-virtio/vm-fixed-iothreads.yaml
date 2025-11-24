@@ -1,0 +1,21 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: db-performance
+  namespace: virt-lab
+spec:
+  template:
+    spec:
+      domain:
+        ioThreadsPolicy: supplementalPool
+        ioThreads:
+          supplementalPoolThreadCount: 4
+        devices:
+          blockMultiQueue: true
+          disks:
+            - name: data1
+              disk:
+                bus: virtio
+            - name: data2
+              disk:
+                bus: virtio
