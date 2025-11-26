@@ -1,8 +1,7 @@
-== *Module 3.1 — Jumbo Frames (Networking)*
+= *3.1 — Jumbo Frames*
 
-==== *_Diagnosing and Fixing MTU Mismatch on a Multus-Attached VM_*
+== *_Diagnosing and Fixing MTU Mismatch on a Multus-Attached VM_*
 
---- 
 === *Scenario*
 
 A virtual machine is attached to a secondary Multus bridge network that
@@ -63,10 +62,10 @@ so that they each receive an IP address in the same subnet (for example
 
 Participants will ping from jumbo-vm1 → jumbo-vm2 using:
 
-[width="100%",cols="100%",options="header",]
-|===
-|ping -M do -s 8972 <peer-VM-IP>
-|===
+[source,bash]
+----
+ping -M do -s 8972 <peer-VM-IP>
+----
 
 **Why two VMs? +
 **Jumbo frames must be sent to a _different_ host to validate end-to-end
@@ -82,10 +81,10 @@ results.
 guest.
 * Use:
 +
-[width="100%",cols="100%",options="header",]
-|===
-|ping -M do -s 8972 <peer-VM-IP>
-|===
+[source,bash]
+----
+ping -M do -s 8972 <peer-VM-IP>
+----
 +
 to validate jumbo-frame support.
 
@@ -109,10 +108,10 @@ All commands in this section run *inside jumbo-vm1*.
 
 *1. Check current MTU*
 
-[width="100%",cols="100%",options="header",]
-|===
-|ip link
-|===
+[source,bash]
+----
+ip link
+----
 
 Expected:
 
@@ -121,17 +120,17 @@ Expected:
 
 *2. Test jumbo frames (will fail)*
 
-[width="100%",cols="100%",options="header",]
-|===
-|ping -M do -s 8972 <peer-VM-IP>
-|===
+[source,bash]
+----
+ping -M do -s 8972 <peer-VM-IP>
+----
 
 Expected output:
 
-[width="100%",cols="100%",options="header",]
-|===
-|ping: local error: message too long, mtu=1500
-|===
+[source,bash]
+----
+ping: local error: message too long, mtu=1500
+----
 
 This confirms an MTU mismatch.
 
@@ -191,41 +190,41 @@ to take effect.
 
 Restart VM1:
 
-[width="100%",cols="100%",options="header",]
-|===
-|virtctl restart jumbo-vm1 -n virt-lab
-|===
+[source,bash]
+----
+virtctl restart jumbo-vm1 -n virt-lab
+----
 
 ---
 === *Part 4 — Validate the Fix*
 
 ==== *1. Confirm MTU*
 
-[width="100%",cols="100%",options="header",]
-|===
-|ip link show dev eth1
-|===
+[source,bash]
+----
+ip link show dev eth1
+----
 
 Expected:
 
-[width="100%",cols="100%",options="header",]
-|===
-|mtu 9000 ...
-|===
+[source,bash]
+----
+mtu 9000 ...
+----
 
 ==== *2. Test jumbo frames again*
 
-[width="100%",cols="100%",options="header",]
-|===
-|ping -M do -s 8972 <peer-VM-IP>
-|===
+[source,bash]
+----
+ping -M do -s 8972 <peer-VM-IP>
+----
 
 Expected:
 
-[width="100%",cols="100%",options="header",]
-|===
-|8972 bytes from <peer-VM-IP>: icmp_seq=1 ttl=64 time=0.23 ms
-|===
+[source,bash]
+----
+8972 bytes from <peer-VM-IP>: icmp_seq=1 ttl=64 time=0.23 ms
+----
 
 Jumbo frames now work end-to-end.
 
@@ -347,25 +346,25 @@ echo "Environment ready. Connect to VM1 and begin testing."
 
 All YAML files used in this lab module are stored in the repo under:
 
-[width="100%",cols="100%",options="header",]
-|===
-|content/modules/ROOT/examples/module-03.1-jumbo-frames/
-|===
+[source,bash]
+----
+content/modules/ROOT/examples/module-03.1-jumbo-frames/
+----
 
 This folder contains:
 
-[width="100%",cols="100%",options="header",]
-|===
-|module-03.1-jumbo-frames/ +
-├── jumbo-bridge-nad.yaml +
-├── vm1-jumbo-broken.yaml +
-├── vm1-jumbo-fixed.yaml +
-├── vm2-jumbo-good.yaml +
+[source,bash]
+----
+|module-03.1-jumbo-frames/ 
+├── jumbo-bridge-nad.yaml 
+├── vm1-jumbo-broken.yaml 
+├── vm1-jumbo-fixed.yaml 
+├── vm2-jumbo-good.yaml 
 └── setup.sh
-|===
+----
 
 These files are referenced throughout the module and are used by the
 setup script.
 
---- 
+
 

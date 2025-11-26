@@ -1,8 +1,8 @@
-== *Module 3.2 – SCSI vs VirtIO + IOThreads*
+= *3.2 – SCSI vs VirtIO + IOThreads*
 
-*RH1 – ETX Virt Super Lab: Performance, Scalability & Troubleshooting*
+== *RH1 – ETX Virt Super Lab: Performance, Scalability & Troubleshooting*
 
-== *Scenario*
+=== *Scenario*
 
 A customer is running a database workload on a virtual machine. Users
 are complaining about slow performance during peak usage. +
@@ -101,19 +101,19 @@ Your goal is to:
 
 SSH or console into the VM:
 
-[width="100%",cols="100%",options="header",]
-|===
-|lsblk
-|===
+[source,bash]
+----
+lsblk
+----
 
 Expected output:
 
-[width="100%",cols="100%",options="header",]
-|===
-|sda 20G +
-sdb 20G +
+[source,bash]
+----
+sda 20G 
+sdb 20G 
 sdc 20G
-|===
+----
 
 This confirms *SCSI* disks.
 
@@ -122,13 +122,13 @@ This confirms *SCSI* disks.
 
 Check the I/O behaviour under load:
 
-[width="100%",cols="100%",options="header",]
-|===
-|sudo fio --name=randwrite --ioengine=libaio --iodepth=1 \ +
+[source,bash]
+----
+sudo fio --name=randwrite --ioengine=libaio --iodepth=1 \ +
 --rw=randwrite --bs=4k --direct=1 --size=512M --numjobs=2
 --group_reporting \ +
 --filename=/dev/sdb
-|===
+----
 
 *Note:*
 This test uses numjobs=2, which is enough to reveal the SCSI bottleneck.
@@ -149,10 +149,10 @@ This is the bottleneck we want the participants to discover.
 
 Participants inspect the VM:
 
-[width="100%",cols="100%",options="header",]
-|===
-|oc get vm db-performance -n virt-lab -o yaml
-|===
+[source,bash]
+----
+oc get vm db-performance -n virt-lab -o yaml
+----
 
 They should see something like:
 
@@ -192,26 +192,26 @@ spec:
 
 Restart VM:
 
-[width="100%",cols="100%",options="header",]
-|===
-|virtctl restart db-performance
-|===
+[source,bash]
+----
+virtctl restart db-performance
+----
 
 Confirm inside the VM:
 
-[width="100%",cols="100%",options="header",]
-|===
-|lsblk
-|===
+[source,bash]
+----
+lsblk
+----
 
 Expected output (example):
 
-[width="100%",cols="100%",options="header",]
-|===
-|sda 20G (rootdisk) +
-vdb 20G (data1) +
+[source,bash]
+----
+|sda 20G (rootdisk) 
+vdb 20G (data1) 
 vdc 20G (data2)
-|===
+----
 
 You should now see the data disks as /dev/vdX devices instead of only
 /dev/sdX.
@@ -241,13 +241,13 @@ Restart VM again.
 
 Inside the VM:
 
-[width="100%",cols="100%",options="header",]
-|===
-|sudo fio --name=randwrite --ioengine=libaio --iodepth=1 \ +
+[source,bash]
+----
+sudo fio --name=randwrite --ioengine=libaio --iodepth=1 \ +
 --rw=randwrite --bs=4k --direct=1 --size=512M --numjobs=2
 --group_reporting \ +
 --filename=/dev/vdb
-|===
+----
 
 Expected improvements:
 
@@ -316,12 +316,12 @@ spec:
 
 Inside the guest, participants will see:
 
-[width="100%",cols="100%",options="header",]
-|===
-|/dev/sda (rootdisk) +
-/dev/sdb (data1) +
+[source,bash]
+----
+/dev/sda (rootdisk) 
+/dev/sdb (data1) 
 /dev/sdc (data2)
-|===
+----
 
 === *2. Fixed VM (VirtIO + IOThreads + Multi-Queue)*
 
@@ -362,12 +362,12 @@ Expected inside VM after patch:
 
 Participants use the same command, only the disk path changes.
 
-[width="100%",cols="100%",options="header",]
-|===
-|sudo fio --name=randwrite --ioengine=libaio --iodepth=1 \ +
+[source,bash]
+----
+sudo fio --name=randwrite --ioengine=libaio --iodepth=1 \ +
 --rw=randwrite --bs=4k --direct=1 --size=512M --numjobs=2 \ +
 --group_reporting --filename=/dev/<disk>
-|===
+----
 
 Use:
 
@@ -491,21 +491,21 @@ echo "Disks should appear as /dev/sda /dev/sdb /dev/sdc inside the guest."
 
 All YAML files used in this lab module are stored in the repository under:
 
-[width="100%",cols="100%",options="header"]
-|===
-|content/modules/ROOT/examples/module-03.2-scsi-vs-virtio/
-|===
+[source,bash]
+----
+content/modules/ROOT/examples/module-03.2-scsi-vs-virtio/
+----
 
 This folder contains:
 
-[width="100%",cols="100%",options="header"]
-|===
-|module-03.2-scsi-vs-virtio/ +
-├── datavolumes.yaml +
-├── setup.sh +
-├── vm-scsi-initial.yaml +
+[source,bash]
+----
+module-03.2-scsi-vs-virtio/ 
+├── datavolumes.yaml 
+├── setup.sh 
+├── vm-scsi-initial.yaml 
 └── vm-fixed-iothreads.yaml
-|===
+----
 
 These files correspond to:
 
