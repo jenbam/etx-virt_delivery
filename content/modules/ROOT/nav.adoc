@@ -3,6 +3,8 @@
 ** xref:00_introductions.adoc[Introductions & Bootcamp Agenda]
 ** xref:03_ocpv_basics.adoc[OpenShift Virtualization Basics]
 ** xref:module-03.adoc[Network Management]
+*** xref:module-03-1-jumbo-frames.adoc[Jumbo Frames]
+*** xref:module-03-2-scsi-virtio.adoc[SCSI vs VirtIO + IOThreads]
 ** xref:module-02.adoc[Storage Management]
 ** xref:module-04.adoc[Introduction to Virtual Machine Customization]
 ** xref:VMs-and-gitops.adoc[Gitops and Virtual Machines]

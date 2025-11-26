@@ -3,3 +3,5 @@ ansible-navigator.log
 .DS_Store
 content/ansible/openshift-virtualization-migration/migrate_vms_update_mac_address.yml
 content/ansible/openshift-virtualization-migration/migrate_vms_update_mac_address_vars.yml
+.cache/
+www/
