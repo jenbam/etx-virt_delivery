@@ -355,7 +355,7 @@ This folder contains:
 
 [source,bash]
 ----
-|module-03.1-jumbo-frames/ 
+module-03.1-jumbo-frames/ 
 ├── jumbo-bridge-nad.yaml 
 ├── vm1-jumbo-broken.yaml 
 ├── vm1-jumbo-fixed.yaml 
