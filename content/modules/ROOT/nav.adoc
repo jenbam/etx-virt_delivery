@@ -1,6 +1,6 @@
 
 * Modules
-** xref:00_introductions.adoc[Introductions & Bootcamp Agenda]
+** xref:index.adoc[Introductions & Bootcamp Agenda]
 ** xref:03_ocpv_basics.adoc[OpenShift Virtualization Basics]
 ** xref:module-03.adoc[Network Management]
 *** xref:module-03-1-jumbo-frames.adoc[Jumbo Frames]
