@@ -2,6 +2,16 @@
 
 == *_Diagnosing and Fixing MTU Mismatch on a Multus-Attached VM_*
 
+=== *Introduction*
+
+In this module, you will focus on troubleshooting and optimizing network performance for virtual machines running on OpenShift Virtualization.
+
+You will investigate a scenario where jumbo frames are enabled at the infrastructure level, but virtual machines are not fully benefiting from them due to an MTU mismatch.
+
+By identifying and correcting this misconfiguration, you will learn how to verify end-to-end MTU settings and ensure jumbo frame support inside virtual machines, a common requirement in high-performance networking environments.
+
+---
+
 === *Scenario*
 
 A virtual machine is attached to a secondary Multus bridge network that

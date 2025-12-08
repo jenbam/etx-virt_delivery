@@ -1,6 +1,16 @@
 = *3.2 – SCSI vs VirtIO + IOThreads*
 
-== *RH1 – ETX Virt Super Lab: Performance, Scalability & Troubleshooting*
+== *_Diagnosing and Fixing VM Disk I/O Bottlenecks with VirtIO and IOThreads_*
+
+=== *Introduction*
+
+In this module, you will focus on troubleshooting and optimizing *storage I/O* performance for a database workload running on OpenShift Virtualization.
+
+You will analyze a scenario where a virtual machine with multiple disks is experiencing poor I/O performance due to limitations of the SCSI disk bus and single-queue behavior.
+
+By converting the disks to VirtIO and enabling IOThreads, you will learn how disk bus selection and I/O threading impact performance, and how to validate improvements using real workload testing.
+
+---
 
 === *Scenario*
 

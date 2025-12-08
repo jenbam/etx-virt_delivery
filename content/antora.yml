@@ -1,5 +1,5 @@
 name: modules
-title: ETX Virtualization Delivery Bootcamp
+title: ETX Virt Super lab - Performance, Scalability, Troubleshooting
 version: master
 nav:
   - modules/ROOT/nav.adoc
