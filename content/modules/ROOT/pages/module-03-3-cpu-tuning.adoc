@@ -1,0 +1,584 @@
+= Module 3.3 — CPU Topology & Pinning
+
+== Introduction
+
+Welcome to the RH1 - Red Hat OpenShift Virtualization Lab for Performance, Scalability and Troubleshooting.
+
+In this module, you will troubleshoot a CPU performance issue caused by an incorrect virtual CPU (vCPU) topology. You will verify how the guest OS sees the CPU layout (sockets and cores), correct the VM’s CPU topology, and then apply CPU pinning to improve performance stability.
+
+This scenario represents a common customer issue where applications behave differently depending on how CPUs are exposed inside the VM, even if the total number of vCPUs stays the same.
+
+== Scenario
+
+Your customer has migrated several virtual machines from VMware to OpenShift Virtualization.
+One database VM in particular is showing unusually low compute performance:
+
+* CPU usage inside the guest spikes to 100%
+* The application reports “only one CPU available”
+* The VM dashboard in the OpenShift Console still shows “2 vCPUs”
+
+You inspect the VM YAML and notice the CPU topology is defined only as:
+
+[source,yaml]
+----
+cpu:
+  cores: 2
+----
+
+Because `cores: 2` is specified without defining sockets, the VM ends up with:
+
+*1 socket × 2 cores × 1 thread = 2 vCPUs*
+
+This topology may not match the application’s expectation.
+Some applications (including databases and JVM workloads) perform better when CPUs are exposed as multiple sockets, not just additional cores.
+
+Your goal is to:
+
+* Identify the incorrect CPU topology
+* Verify how the guest OS sees the CPUs
+* Update the VM definition to use *2 sockets × 1 core each*
+* Verify that the application now sees the correct topology
+
+== Relevant Documentation
+
+* https://man7.org/linux/man-pages/man1/lscpu.1.html[lscpu(1) — Linux manual page]
+* https://kubevirt.io/user-guide/compute/dedicated_cpu_resources/[KubeVirt — Dedicated CPU resources (dedicatedCpuPlacement)]
+* https://kubevirt.io/user-guide/compute/numa/[KubeVirt — NUMA support and guestMappingPassthrough]
+* https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/6/html/deployment_guide/s2-sysinfo-hardware-lscpu[Red Hat Enterprise Linux — Using the lscpu command]
+
+== Initial Guidance (Hints)
+
+* The total number of vCPUs can remain the same while the *CPU layout* differs.
+* vCPU topology is calculated as: *sockets × cores × threads*.
+* When only `cores:` is set, the VM typically defaults to *1 socket*.
+* Inside the VM, the `lscpu` command shows how the guest OS sees CPU sockets and cores.
+* Some workloads (especially databases and JVM-based applications) treat *1×2* differently from *2×1*.
+* After changing CPU topology or enabling CPU pinning, you must *restart the VM* for changes to take effect.
+
+== Part 1 — Inspect the VM and Confirm the Issue
+
+=== Step 1 — Inspect the VM CPU configuration from OpenShift
+
+Open the VM definition:
+
+[source,bash]
+----
+oc get vm <vm-name> -n <namespace> -o yaml
+----
+
+Locate the CPU section. You should see:
+
+[source,yaml]
+----
+cpu:
+  cores: 2
+----
+
+Note that this means the VM is configured as:
+
+* `1 socket × 2 cores × 1 thread = 2 vCPUs`
+
+Although the OpenShift Console correctly shows `2 vCPUs`, the CPU topology is exposed as a single socket.
+
+This is important because many applications make scheduling decisions based on sockets, not just core count.
+
+=== Step 2 — Check how the guest OS sees the CPUs
+
+Open the VM -> *Console* in the OpenShift Web UI.
+
+Inside the guest, run:
+
+[source,bash]
+----
+lscpu
+----
+
+You will likely see output similar to:
+
+[source,text]
+----
+CPU(s):              2
+Socket(s):           1
+Core(s) per socket:  2
+Thread(s) per core:  1
+----
+
+This confirms that the VM is running with:
+
+* `1 socket`
+* `2 cores`
+* No hyperthreading
+
+So even though there are `2 vCPUs`, they are both placed under a single CPU socket.
+
+=== Step 3 — Observe the symptoms (what the customer actually experiences)
+
+At this point, you can clearly see the mismatch:
+
+* The OpenShift VM dashboard shows `2 vCPUs`
+* But the guest OS sees only `1` CPU socket
+* The application believes it is running on a single CPU package
+
+As a result, the customer experiences:
+
+* CPU usage reaching `100%` very quickly
+* Poor performance during parallel workloads
+* The application reporting “only one CPU available”
+* Work that should run in parallel instead runs more slowly than expected
+
+This is the problem you are about to fix.
+
+== Part 2 — Fix the CPU Topology
+
+=== Step 1 — Update the VM CPU configuration
+
+Now that you have confirmed the VM is running with `1 socket` and `2 cores`, you will correct the topology so that the VM uses:
+
+* `2 sockets × 1 core each`
+
+Edit the VM YAML (from the Web Console or using `oc edit vm`):
+
+[source,bash]
+----
+oc edit vm <vm-name> -n <namespace>
+----
+
+In the `spec.template.spec.domain.cpu` section, change:
+
+[source,yaml]
+----
+cpu:
+  cores: 2
+----
+
+to:
+
+[source,yaml]
+----
+cpu:
+  sockets: 2
+  cores: 1
+  threads: 1
+----
+
+This still gives `2 vCPUs`, but now as:
+
+* `2 sockets × 1 core × 1 thread = 2 vCPUs`
+
+instead of:
+
+* `1 socket × 2 cores × 1 thread = 2 vCPUs`
+
+So you are changing how the CPUs are presented to the guest OS — not the number of vCPUs.
+
+=== Step 2 — Why this change helps
+
+With the new topology:
+
+* The guest OS now sees `2 CPU sockets` instead of `1`
+* Some applications (databases, JVMs, etc.) look at the number of sockets when deciding how many worker threads to start
+
+Showing the CPUs as `2 sockets` can help these workloads:
+
+* detect multiple CPU packages instead of just one
+* spread work more evenly
+* make better use of the available CPUs
+* avoid CPU scheduling limits that exist with single-socket designs
+* improve performance for parallel workloads
+
+In the next part, you will confirm this by running `lscpu` again and checking how the application behaves.
+
+=== Step 3 — Restart the VM to apply the change
+
+After saving the YAML, restart the VM so the new CPU topology takes effect:
+
+[source,bash]
+----
+virtctl restart <vm-name> -n <namespace>
+----
+
+Wait for the VM to come back up and become *Running* again in the OpenShift Console.
+
+== Part 3 — Validate After the Fix
+
+After updating the VM to use `2 sockets × 1 core each`, restart the VM and verify that the guest now sees the correct topology.
+
+=== Step 1 — Verify the new CPU layout inside the guest
+
+Open the VM console again and run:
+
+[source,bash]
+----
+lscpu
+----
+
+You should now see something like:
+
+[source,text]
+----
+CPU(s):              2
+Socket(s):           2
+Core(s) per socket:  1
+Thread(s) per core:  1
+----
+
+This confirms the VM is now configured as:
+
+* `2 sockets`
+* `1 core per socket`
+* No hyperthreads
+
+This is the topology many database and JVM workloads prefer because they treat each socket as a distinct CPU package.
+
+=== Step 2 — Check the application behaviour
+
+After the topology change, the customer should now see:
+
+* The application correctly reporting *2 CPUs*
+  (instead of assuming a single CPU package)
+* Better thread distribution across both sockets
+* Improved performance during parallel or multi-threaded operations
+
+Workload symptoms that should improve:
+
+* Lower CPU saturation
+* More consistent throughput
+* Reduced latency during compute-heavy tasks
+
+== Part 4 — Improve Performance with CPU Pinning
+
+After correcting the CPU topology, you can further optimize CPU performance by pinning the VM’s vCPUs to specific physical CPUs on the worker node.
+
+CPU pinning helps when workloads require:
+
+* predictable CPU latency
+* reduced scheduling jitter
+* isolation from noisy neighbors on multi-tenant nodes
+* consistent performance for databases or JVM-based applications
+
+=== Step 1 — Check the worker node CPU layout
+
+On the worker node where the VM is running:
+
+[source,bash]
+----
+lscpu
+----
+
+Note:
+
+* number of sockets
+* cores per socket
+* NUMA nodes
+
+This helps you understand where physical CPUs are located.
+
+=== Step 2 — Add CPU pinning to the VM
+
+Edit the VM YAML to include a CPU dedicated pool and explicit CPU placement.
+
+Example snippet to add under `spec.template.spec.domain`:
+
+[source,yaml]
+----
+cpu:
+  sockets: 2
+  cores: 1
+  threads: 1
+  dedicatedCpuPlacement: true
+----
+
+This instructs OpenShift Virtualization to:
+
+* reserve exclusive physical CPUs for this VM
+* avoid sharing CPUs with other workloads
+* ensure stable, predictable performance
+
+=== Step 3 — (Optional but recommended) Add CPU NUMA mapping
+
+If the worker node has NUMA nodes, you can align vCPUs to NUMA boundaries:
+
+[source,yaml]
+----
+numa:
+  guestMappingPassthrough: {}
+----
+
+This ensures the VM’s internal CPU and memory placement respects the host’s NUMA topology.
+
+=== Step 4 — Verify pinning is in effect
+
+After restarting the VM:
+
+Inside the guest:
+
+[source,bash]
+----
+lscpu --extended
+----
+
+Expected improvements:
+
+* Lower CPU steal time
+* More stable response times
+* Parallel threads avoid competing with other pods on noisy cores
+
+On the node:
+
+[source,bash]
+----
+virsh vcpupin <vm-domain>
+----
+
+You should see each vCPU assigned to a specific physical core.
+
+=== Summary of CPU Pinning Benefits
+
+[cols="1,1",options="header"]
+|===
+| Feature | What It Improves
+
+| Dedicated CPU Placement
+| Prevents CPU contention with other pods
+
+| NUMA-aligned Pinning
+| Reduces cross-NUMA latency
+
+| Predictable Scheduling
+| Ideal for latency-sensitive workloads
+
+| Better Throughput
+| VM receives consistent access to physical CPU
+|===
+
+== Artifacts for the Lab
+
+This lab includes three VM YAML definitions showing progressively improved CPU configuration, plus a helper setup script.
+
+=== vm-cpu-broken.yaml — incorrect CPU topology (only cores defined)
+
+Incorrect topology: only cores defined → `1 socket × 2 cores × 1 thread = 2 vCPUs`
+
+[source,yaml]
+----
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: cpu-vm-broken
+  namespace: virt-lab
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: cpu-vm-broken
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        resources:
+          requests:
+            memory: 2Gi
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/containerdisks/fedora:latest
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: fedora
+              password: redhat
+              chpasswd: { expire: False }
+              ssh_pwauth: True
+----
+
+=== vm-cpu-fixed.yaml — corrected topology (2 sockets × 1 core)
+
+Correct topology: `2 sockets × 1 core × 1 thread = 2 vCPUs`
+
+[source,yaml]
+----
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: cpu-vm-fixed
+  namespace: virt-llab
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: cpu-vm-fixed
+    spec:
+      domain:
+        cpu:
+          sockets: 2
+          cores: 1
+          threads: 1
+        resources:
+          requests:
+            memory: 2Gi
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/containerdisks/fedora:latest
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: fedora
+              password: redhat
+              chpasswd: { expire: False }
+              ssh_pwauth: True
+----
+
+=== vm-cpu-pinned.yaml — corrected topology plus CPU pinning
+
+Same topology as fixed, plus CPU pinning via `dedicatedCpuPlacement`.
+
+This uses:
+
+* `dedicatedCpuPlacement: true`
+* Explicit NUMA topology
+* `cpuPinningPolicy: static` (optional but recommended)
+
+[source,yaml]
+----
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: cpu-demo-vm-pinned
+  namespace: virt-lab
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: cpu-demo-vm-pinned
+    spec:
+      domain:
+        cpu:
+          sockets: 2
+          cores: 1
+          threads: 1
+          dedicatedCpuPlacement: true # CPU Pinning Enabled
+        numa:
+          guestMappingPassthrough: {}
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: "2"
+          limits:
+            cpu: "2"
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/containerdisks/fedora:latest
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: fedora
+              password: redhat
+              chpasswd: { expire: False }
+              ssh_pwauth: True
+----
+
+=== setup.sh
+
+Simple script to prep namespace and create the broken VM as starting point.
+
+[source,bash]
+----
+#!/usr/bin/env bash
+set -euo pipefail
+
+NAMESPACE="virt-lab"
+
+echo ">>> Ensuring namespace ${NAMESPACE} exists..."
+if ! oc get ns "${NAMESPACE}" >/dev/null 2>&1; then
+  oc new-project "${NAMESPACE}"
+else
+  oc project "${NAMESPACE}" >/dev/null
+fi
+
+echo ">>> Applying initial (broken) CPU topology VM..."
+oc apply -f vm-cpu-broken.yaml
+
+echo ">>> Starting vm-cpu-broken..."
+virtctl start vm-cpu-broken -n "${NAMESPACE}"
+
+echo ">>> Done."
+echo "Connect to the VM console from the OpenShift Web Console and run 'lscpu' to inspect the current CPU topology."
+echo "Later in the lab, replace this VM with vm-cpu-fixed.yaml and vm-cpu-pinned.yaml to see the differences."
+----
+
+=== Repo Location of Artifacts
+
+All YAML files used in this lab module are stored in the repository under:
+
+[source,text]
+----
+content/modules/ROOT/examples/module-03.3-cpu-topology/
+----
+
+The folder contains:
+
+[source,text]
+----
+module-03.3-cpu-topology/
+├── vm-cpu-broken.yaml
+├── vm-cpu-fixed.yaml
+├── vm-cpu-pinned.yaml
+└── setup.sh
+----
+
+These files correspond to:
+
+* `vm-cpu-broken.yaml` – Deploys the VM in the initial “broken” state, where CPU topology is defined only as `cores: 2` (`1 socket × 2 cores`)
+* `vm-cpu-fixed.yaml` – Deploys the VM with the corrected topology: `2 sockets × 1 core × 1 thread`
+* `vm-cpu-pinned.yaml` – Deploys the VM with the corrected topology and CPU pinning enabled using `dedicatedCpuPlacement: true`
+* `setup.sh` – Creates the namespace (if needed) and deploys + starts the initial “broken” VM to begin the lab
