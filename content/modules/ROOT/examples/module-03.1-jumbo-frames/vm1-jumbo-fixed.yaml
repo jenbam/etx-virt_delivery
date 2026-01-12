@@ -18,6 +18,9 @@ spec:
             - name: rootdisk
               disk:
                 bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
           interfaces:
             - name: default
               masquerade: {}
@@ -37,3 +40,11 @@ spec:
         - name: rootdisk
           containerDisk:
             image: quay.io/containerdisks/fedora:latest
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: fedora
+              password: redhat
+              chpasswd: { expire: False }
+              ssh_pwauth: True
